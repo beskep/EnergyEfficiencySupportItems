@@ -1,0 +1,64 @@
+[project]
+name = "EnergyEfficiencySupportItems"
+version = "0.1.0"
+description = "에너지효율개선사업 지원품목 확대방안 연구"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cmap>=0.6.0",
+    "cyclopts>=3.14.0",
+    "fastexcel>=0.13.0",
+    "loguru>=0.7.3",
+    "polars>=1.28.1",
+    "pyarrow>=20.0.0",
+    "pyside6>=6.9.0",
+    "rich>=14.0.0",
+    "seaborn>=0.13.2",
+    "upsetplot>=0.9.0",
+    "whenever>=0.7.3",
+    "xlsxwriter>=3.2.3",
+]
+
+[dependency-groups]
+dev = ["mypy>=1.15.0", "ruff>=0.11.7"]
+
+[tool.ruff.format]
+quote-style = "single"
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN",    # flake8-annotations
+    "COM",    # flake8-commas
+    "CPY",    # flake8-copyright
+    "D1",     # pydocstyle: D1*
+    "FIX",    # flake8-fixme
+    "INP",    # flake8-no-pep420
+    "PD",     # pandas-vet
+    "Q",      # flake8-quotes
+    "S",      # flake8-bandit
+    "SIM105", # flake8-simplify: suppressible-exception
+    "T20",    # flake8-print
+    "TD",     # flake8-todos
+]
+extend-safe-fixes = [
+    "EM", # flake8-errmsg
+    "PT", # flake8-pytest-style
+    "TC", # flake8-type-checking
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.mypy]
+disable_error_code = ["import", "import-untyped"]
+check_untyped_defs = true
+warn_unused_configs = true
+warn_unused_ignores = true
