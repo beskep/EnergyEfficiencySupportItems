@@ -22,6 +22,10 @@ dependencies = [
 [dependency-groups]
 dev = ["mypy>=1.15.0", "ruff>=0.11.7"]
 
+[tool.ruff]
+preview = true
+output-format = "concise"
+
 [tool.ruff.format]
 quote-style = "single"
 docstring-code-format = true
