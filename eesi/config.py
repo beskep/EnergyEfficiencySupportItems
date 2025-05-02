@@ -22,25 +22,26 @@ class Vars:
     COST: str = '총지원금액'
     CONTRACTOR_PAYMENTS: str = '시공업체계약금액'
 
+    class Residual:
+        # 가구
+        REGISTRATION_DATE: str = '등록일'
+        SUPPORT_TYPE: str = '보호유형'
+        RESID_TYPE: str = '주택유형'
+        OWNERSHIP: str = '주거실태'  # 자가, 전세, 월세, ...
 
-class ResidVars(Vars):
-    # 가구
-    REGISTRATION_DATE: str = '등록일'
-    SUPPORT_TYPE: str = '보호유형'
-    RESIDENTIAL_TYPE: str = '주택유형'
-    OWNERSHIP: str = '주거실태'  # 자가, 전세, 월세, ...
+    class SocialService:
+        # 사회복지시설
+        EXISTING_BOILER: str = '기존보일러유무'
+        EXISTING_BOILER_FUEL: str = '기존보일러연료'
+        EXISTING_BOILER_FUEL_COLS: tuple[str, ...] = (
+            '기름일반',
+            '기름고효율',
+            '가스일반',
+            '가스콘덴싱',
+        )
 
-
-class SrclServVars(Vars):
-    # 사회복지시설
-    EXISTING_BOILER: str = '기존보일러유무'
-    EXISTING_BOILER_FUEL: str = '기존보일러연료'
-    EXISTING_BOILER_FUEL_COLS: tuple[str, ...] = (
-        '기름일반',
-        '기름고효율',
-        '가스일반',
-        '가스콘덴싱',
-    )
+    Resid = Residual
+    Social = SocialService
 
 
 @dc.dataclass

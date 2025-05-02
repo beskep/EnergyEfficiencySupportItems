@@ -10,7 +10,7 @@ import rich
 from loguru import logger
 
 from eesi import utils
-from eesi.config import BldgType, Config, ResidVars, SrclServVars, Vars
+from eesi.config import BldgType, Config, Vars
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -98,42 +98,42 @@ class Preprocess:
 
         schema = lf.collect_schema()
 
-        if ResidVars.REGISTRATION_DATE in schema:
-            lf = lf.with_columns(pl.col(ResidVars.REGISTRATION_DATE).dt.date())
+        if Vars.Resid.REGISTRATION_DATE in schema:
+            lf = lf.with_columns(pl.col(Vars.Resid.REGISTRATION_DATE).dt.date())
 
-        if ResidVars.OWNERSHIP in schema:
-            expr = pl.col(ResidVars.OWNERSHIP)
+        if Vars.Resid.OWNERSHIP in schema:
+            expr = pl.col(Vars.Resid.OWNERSHIP)
             lf = (
                 lf.with_columns(expr.replace({'-': '기타'}))
                 .with_columns(
-                    expr.alias(f'{ResidVars.OWNERSHIP}(원본)'),
+                    expr.alias(f'{Vars.Resid.OWNERSHIP}(원본)'),
                     expr.replace_strict(cls.OWNERSHIP, default='비자가'),
                 )
                 .with_columns()
             )
 
-        if ResidVars.SUPPORT_TYPE in schema:
+        if Vars.Resid.SUPPORT_TYPE in schema:
             lf = lf.with_columns(
                 # NOTE 보호유형: 데이터 정제 어려움
-                pl.col(ResidVars.SUPPORT_TYPE).str.replace_all(' ', '').str.split(',')
+                pl.col(Vars.Resid.SUPPORT_TYPE).str.replace_all(' ', '').str.split(',')
             )
 
-        if SrclServVars.EXISTING_BOILER in schema:
+        if Vars.Social.EXISTING_BOILER in schema:
             lf = lf.with_row_index()
             fuel = (
-                lf.select(['index', *SrclServVars.EXISTING_BOILER_FUEL_COLS])
-                .unpivot(index='index', variable_name=SrclServVars.EXISTING_BOILER_FUEL)
+                lf.select(['index', *Vars.Social.EXISTING_BOILER_FUEL_COLS])
+                .unpivot(index='index', variable_name=Vars.Social.EXISTING_BOILER_FUEL)
                 .filter(pl.col('value').is_not_null())
                 .drop('value')
             )
             lf = (
-                lf.drop(SrclServVars.EXISTING_BOILER_FUEL_COLS)
+                lf.drop(Vars.Social.EXISTING_BOILER_FUEL_COLS)
                 .select(
-                    pl.all().exclude(SrclServVars.EXISTING_BOILER),
-                    SrclServVars.EXISTING_BOILER,
+                    pl.all().exclude(Vars.Social.EXISTING_BOILER),
+                    Vars.Social.EXISTING_BOILER,
                 )
                 .with_columns(
-                    pl.col(SrclServVars.EXISTING_BOILER).replace_strict(
+                    pl.col(Vars.Social.EXISTING_BOILER).replace_strict(
                         {'유': True, '무': False}, return_dtype=pl.Boolean
                     )
                 )

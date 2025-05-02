@@ -12,7 +12,7 @@ import seaborn as sns
 from cmap import Colormap
 
 from eesi import utils
-from eesi.config import BldgType, Config, ResidVars, Vars
+from eesi.config import BldgType, Config, Vars
 
 
 def _upset_plot(
@@ -85,8 +85,8 @@ def upset(bldg: BldgType, *, support_type: bool = False, conf: Config):
 
     if support_type and bldg == BldgType.RESIDENTIAL:
         upset = _upset_plot(
-            lf.filter(pl.col(ResidVars.SUPPORT_TYPE).is_not_null()),
-            membership=ResidVars.SUPPORT_TYPE,
+            lf.filter(pl.col(Vars.Resid.SUPPORT_TYPE).is_not_null()),
+            membership=Vars.Resid.SUPPORT_TYPE,
             value=Vars.COST,
         )
         fig = plt.figure()
@@ -102,25 +102,25 @@ class _ResidentialTypes:
 
     def __post_init__(self):
         self.lf = pl.scan_parquet(self.conf.source(BldgType.RESIDENTIAL)).select(
-            Vars.COST, Vars.CONSTR, ResidVars.OWNERSHIP, ResidVars.RESIDENTIAL_TYPE
+            Vars.COST, Vars.CONSTR, Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE
         )
 
     def heatmap_types_count(self):
         count = (
-            self.lf.group_by(ResidVars.RESIDENTIAL_TYPE, ResidVars.OWNERSHIP)
+            self.lf.group_by(Vars.Resid.RESID_TYPE, Vars.Resid.OWNERSHIP)
             .len()
             .collect()
             .drop_nulls()
             .pivot(
-                ResidVars.RESIDENTIAL_TYPE,
-                index=ResidVars.OWNERSHIP,
+                Vars.Resid.RESID_TYPE,
+                index=Vars.Resid.OWNERSHIP,
                 values='len',
                 sort_columns=True,
             )
-            .sort(ResidVars.OWNERSHIP)
+            .sort(Vars.Resid.OWNERSHIP)
             .fill_null(0)
             .to_pandas()
-            .set_index(ResidVars.OWNERSHIP)
+            .set_index(Vars.Resid.OWNERSHIP)
         )
 
         fig, ax = plt.subplots()
@@ -150,11 +150,11 @@ class _ResidentialTypes:
 
         if not etc:
             data = data.filter(
-                pl.col(ResidVars.OWNERSHIP) != '기타',
-                pl.col(ResidVars.RESIDENTIAL_TYPE) != '기타',
+                pl.col(Vars.Resid.OWNERSHIP) != '기타',
+                pl.col(Vars.Resid.RESID_TYPE) != '기타',
             )
 
-        types = data[ResidVars.RESIDENTIAL_TYPE].unique().sort().to_list()
+        types = data[Vars.Resid.RESID_TYPE].unique().sort().to_list()
         ownership = ['자가', '전체무료임차', '비자가']
         if etc:
             ownership.append('기타')
@@ -163,9 +163,9 @@ class _ResidentialTypes:
         sns.barplot(
             data,
             x=Vars.COST,
-            y=ResidVars.RESIDENTIAL_TYPE,
+            y=Vars.Resid.RESID_TYPE,
             order=types,
-            hue=ResidVars.OWNERSHIP,
+            hue=Vars.Resid.OWNERSHIP,
             hue_order=ownership,
             ax=ax,
             palette=self._cost_palette,
@@ -189,24 +189,22 @@ class _ResidentialTypes:
             case '전체':
                 pass
             case '기타제외':
-                lf = lf.filter(pl.col(ResidVars.OWNERSHIP) != '기타')
+                lf = lf.filter(pl.col(Vars.Resid.OWNERSHIP) != '기타')
             case _:
-                lf = lf.filter(pl.col(ResidVars.OWNERSHIP) == ownership)
+                lf = lf.filter(pl.col(Vars.Resid.OWNERSHIP) == ownership)
 
         match resid_type:
             case '전체':
                 pass
             case '기타제외':
-                lf = lf.filter(pl.col(ResidVars.RESIDENTIAL_TYPE) != '기타')
+                lf = lf.filter(pl.col(Vars.Resid.RESID_TYPE) != '기타')
             case _:
-                lf = lf.filter(pl.col(ResidVars.RESIDENTIAL_TYPE) == resid_type)
+                lf = lf.filter(pl.col(Vars.Resid.RESID_TYPE) == resid_type)
 
-        variables = [ResidVars.OWNERSHIP, ResidVars.RESIDENTIAL_TYPE]
+        vars_ = [Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE]
         filters = [ownership, resid_type]
         between = [
-            x
-            for x, y in zip(variables, filters, strict=True)
-            if y in {'전체', '기타제외'}
+            x for x, y in zip(vars_, filters, strict=True) if y in {'전체', '기타제외'}
         ]
 
         return lf, between
@@ -227,8 +225,8 @@ class _ResidentialTypes:
             effsize='np2',
         )
         return pl.from_pandas(anova).select(
-            pl.lit(ownership).alias(ResidVars.OWNERSHIP),
-            pl.lit(resid_type).alias(ResidVars.RESIDENTIAL_TYPE),
+            pl.lit(ownership).alias(Vars.Resid.OWNERSHIP),
+            pl.lit(resid_type).alias(Vars.Resid.RESID_TYPE),
             pl.all(),
         )
 
@@ -242,8 +240,8 @@ class _ResidentialTypes:
                 .to_series()
             )
 
-        ownership = values(ResidVars.OWNERSHIP)
-        resid_type = values(ResidVars.RESIDENTIAL_TYPE)
+        ownership = values(Vars.Resid.OWNERSHIP)
+        resid_type = values(Vars.Resid.RESID_TYPE)
 
         def cases():
             yield from itertools.product(['전체', '기타제외'], ['전체', '기타제외'])
@@ -270,5 +268,5 @@ def residential_type(conf: Config):
 
 
 if __name__ == '__main__':
-    utils.mpl.MplTheme(0.8).grid(color='0.75', lw=0.8).apply()
+    utils.mpl.MplTheme(0.8).grid().apply()
     app()
