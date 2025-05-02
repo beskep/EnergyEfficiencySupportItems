@@ -11,6 +11,9 @@ class BldgType(enum.StrEnum):
     RESIDENTIAL = '가구'
     SOCIAL_SERVICE = '사회복지시설'
 
+    R = RESIDENTIAL
+    S = SOCIAL_SERVICE
+
 
 class Vars:
     YEAR: str = '사업연도'
@@ -19,10 +22,16 @@ class Vars:
     COST: str = '총지원금액'
     CONTRACTOR_PAYMENTS: str = '시공업체계약금액'
 
+
+class ResidVars(Vars):
     # 가구
     REGISTRATION_DATE: str = '등록일'
     SUPPORT_TYPE: str = '보호유형'
+    RESIDENTIAL_TYPE: str = '주택유형'
+    OWNERSHIP: str = '주거실태'  # 자가, 전세, 월세, ...
 
+
+class SrclServVars(Vars):
     # 사회복지시설
     EXISTING_BOILER: str = '기존보일러유무'
     EXISTING_BOILER_FUEL: str = '기존보일러연료'
@@ -56,6 +65,9 @@ class Config:
             setattr(self.dirs, field, self.root / v)
 
         return self
+
+    def source(self, bldg: BldgType, /):
+        return self.dirs.data / f'0001.{bldg}.parquet'
 
 
 if __name__ == '__main__':

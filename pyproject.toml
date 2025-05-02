@@ -9,6 +9,7 @@ dependencies = [
     "cyclopts>=3.14.0",
     "fastexcel>=0.13.0",
     "loguru>=0.7.3",
+    "pingouin>=0.5.5",
     "polars>=1.28.1",
     "pyarrow>=20.0.0",
     "pyside6>=6.9.0",
@@ -38,12 +39,10 @@ ignore = [
     "CPY",    # flake8-copyright
     "D1",     # pydocstyle: D1*
     "FIX",    # flake8-fixme
-    "INP",    # flake8-no-pep420
     "PD",     # pandas-vet
     "Q",      # flake8-quotes
     "S",      # flake8-bandit
     "SIM105", # flake8-simplify: suppressible-exception
-    "T20",    # flake8-print
     "TD",     # flake8-todos
 ]
 extend-safe-fixes = [
