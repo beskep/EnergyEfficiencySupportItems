@@ -3,9 +3,11 @@ from __future__ import annotations
 import dataclasses as dc
 import functools
 import itertools
+from typing import TYPE_CHECKING
 
 import cyclopts
 import matplotlib.pyplot as plt
+import numpy as np
 import pingouin as pg
 import polars as pl
 import seaborn as sns
@@ -14,52 +16,113 @@ from cmap import Colormap
 from eesi import utils
 from eesi.config import BldgType, Config, Vars
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def _upset_plot(
-    data: pl.DataFrame | pl.LazyFrame,
-    membership: str,
-    value: str | None = None,
-    *,
-    max_subset: int = 20,
-    by_year: bool = True,
-):
-    from eesi import _upset  # noqa: PLC0415
+    import marsilea as ma
 
-    membership_data = (
-        data.lazy()  # fmt
-        .select(pl.col(membership))
-        .collect()
-        .to_series()
-        .to_pandas()
-    )
-    values = [Vars.YEAR] if value is None else [Vars.YEAR, value]
-    upset_data = _upset.from_memberships(
-        membership_data,
-        data=data.lazy().select(values).collect().to_pandas(),
-    )
 
-    upset = _upset.UpSet(
-        upset_data,
-        subset_size='count',
-        sort_by='cardinality',
-        max_subset_rank=max_subset,
-        show_counts='{:,}',
-        intersection_plot_elements=0 if by_year else 6,
-    )
+@dc.dataclass
+class _UpsetPlotter:
+    data: pl.LazyFrame
+    construction: str = Vars.CONSTR  # membership
+    cost: str = Vars.COST
+    max_subset: int = 20
 
-    if by_year:
-        upset.add_stacked_bars(
-            Vars.YEAR,
-            colors=Colormap('seaborn:crest')([0.2, 0.5, 0.8]),
-            title='연도별 건수',
+    @functools.cached_property
+    def _colormap(self):
+        return Colormap('seaborn:crest')([0.2, 0.5, 0.8])
+
+    def __call__(self, path: Path):
+        upset = self.by_upsetplot()
+        upset.plot(fig := plt.figure())
+        fig.savefig(path.parent / f'{path.stem}-upsetplot.png')
+        plt.close(fig)
+
+        upset = self.by_marsilea()
+        upset.render(fig := plt.figure())
+        fig.savefig(path.parent / f'{path.stem}-marsilea.png')
+        plt.close(fig)
+
+    def _data(self):
+        return self.data.filter(
+            pl.col(self.construction).is_not_null(),
+            pl.col(self.construction).list.len() != 0,
         )
 
-    if value:
+    def by_upsetplot(self):
+        from eesi import _upset  # noqa: PLC0415
+
+        df = (
+            self._data()
+            .select(self.construction, self.cost, Vars.YEAR)
+            .collect()
+            .to_pandas()
+        )
+        data = _upset.from_memberships(
+            memberships=df[self.construction],
+            data=df[[self.cost, Vars.YEAR]],
+        )
+        upset = _upset.UpSet(
+            data,
+            subset_size='count',
+            sort_by='cardinality',
+            max_subset_rank=self.max_subset or None,
+            show_counts='{:,}',
+            intersection_plot_elements=0,
+        )
+        upset.add_stacked_bars(Vars.YEAR, colors=self._colormap, title='연도별 건수')
         upset.add_catplot(
-            kind='violin', value=value, linewidth=0.75, density_norm='width'
+            kind='violin', value=self.cost, linewidth=0.75, density_norm='width'
+        )
+        return upset
+
+    def by_marsilea(self) -> ma.upset.Upset:
+        import marsilea as ma  # noqa: PLC0415
+
+        df = (
+            self._data()
+            .select(self.construction, self.cost, Vars.YEAR)
+            .with_columns(
+                pl.len()
+                .over(self.construction)
+                .rank('dense', descending=True)
+                .alias('rank')
+            )
+            .with_row_index()
+            .collect()
+            .to_pandas()
+            .set_index('index')
         )
 
-    return upset
+        data = ma.upset.UpsetData.from_memberships(
+            items=df[self.construction],
+            items_names=df.index,
+            items_attrs=df[[self.cost, Vars.YEAR]],
+        )
+        if self.max_subset:
+            cardinality = data.sets_table()['cardinality'].to_numpy()
+            min_cardinality = (
+                None
+                if cardinality.size <= self.max_subset
+                else np.sort(cardinality)[::-1][self.max_subset - 1]
+            )
+
+        upset = ma.upset.Upset(
+            data,
+            sort_sets='ascending',
+            sort_subsets='-cardinality',
+            min_cardinality=min_cardinality,
+        )
+        # TODO 연도별 개수
+        upset.add_items_attr(
+            side='top',
+            attr_name=self.cost,
+            plot='violin',
+            pad=0.2,
+            plot_kws={'density_norm': 'width'},
+        )
+        return upset
 
 
 app = utils.cli.App(
@@ -68,31 +131,16 @@ app = utils.cli.App(
 
 
 @app.command
-def upset(bldg: BldgType, *, support_type: bool = False, conf: Config):
-    lf = pl.scan_parquet(conf.source(bldg))
-    upset = _upset_plot(
-        lf.filter(
-            pl.col(Vars.CONSTR).is_not_null(),
-            pl.col(Vars.CONSTR).list.len() != 0,
-        ),
-        membership=Vars.CONSTR,
-        value=Vars.COST,
-    )
-    fig = plt.figure()
-    upset.plot(fig)
-    fig.savefig(conf.dirs.analysis / f'0000.upset-{bldg}.png')
-    plt.close(fig)
+def upset(*, conf: Config):
+    for bldg in BldgType:
+        plotter = _UpsetPlotter(data=pl.scan_parquet(conf.source(bldg)))
 
-    if support_type and bldg == BldgType.RESIDENTIAL:
-        upset = _upset_plot(
-            lf.filter(pl.col(Vars.Resid.SUPPORT_TYPE).is_not_null()),
-            membership=Vars.Resid.SUPPORT_TYPE,
-            value=Vars.COST,
-        )
-        fig = plt.figure()
-        upset.plot(fig)
-        fig.savefig(conf.dirs.analysis / f'0000.upset-{bldg}-support.png')
-        plt.close(fig)
+        for original in [False, True]:
+            suffix = '(원본)' if original else ''
+            constr = f'{Vars.CONSTR}{suffix}'
+            plotter.construction = constr
+
+            plotter(conf.dirs.analysis / f'0000.upset-{bldg}{suffix}.png')
 
 
 @dc.dataclass

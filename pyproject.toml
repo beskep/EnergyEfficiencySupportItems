@@ -9,6 +9,7 @@ dependencies = [
     "cyclopts>=3.14.0",
     "fastexcel>=0.13.0",
     "loguru>=0.7.3",
+    "marsilea>=0.5.2",
     "pingouin>=0.5.5",
     "polars>=1.28.1",
     "pyarrow>=20.0.0",
@@ -25,7 +26,7 @@ dev = ["mypy>=1.15.0", "ruff>=0.11.7"]
 
 [tool.ruff]
 preview = true
-output-format = "concise"
+output-format = "grouped"
 
 [tool.ruff.format]
 quote-style = "single"
@@ -51,14 +52,17 @@ extend-safe-fixes = [
     "TC", # flake8-type-checking
 ]
 
-[tool.ruff.lint.pydocstyle]
-convention = "numpy"
-
 [tool.ruff.lint.isort]
 required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 8
+
+[tool.ruff.lint.pydoclint]
+ignore-one-line-docstrings = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
 
 [tool.mypy]
 disable_error_code = ["import", "import-untyped"]
