@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import functools
+import io
 import itertools
-import shutil
-import subprocess as sp
 from typing import TYPE_CHECKING
 
 import cyclopts
@@ -15,6 +15,7 @@ import polars as pl
 import polars.selectors as cs
 import seaborn as sns
 import shutup
+import wand.image
 from cmap import Colormap
 from loguru import logger
 
@@ -25,6 +26,31 @@ from eesi.utils._terminal import Progress
 if TYPE_CHECKING:
     import marsilea as ma
     from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+
+
+@contextlib.contextmanager
+def figure_context(*args, **kwargs):
+    # TODO to utils
+    fig = plt.figure(*args, **kwargs)
+    yield fig
+    plt.close(fig)
+
+
+def _trim_figure(fig: Figure, pad: int | None = 10):
+    f = io.BytesIO()
+    fig.savefig(f)
+    image = wand.image.Image(blob=f.getvalue())
+    image.trim()
+
+    if pad:
+        image.extent(
+            width=image.width + 2 * pad,
+            height=image.height + 2 * pad,
+            gravity='center',
+        )
+
+    return image
 
 
 @dc.dataclass
@@ -36,10 +62,6 @@ class _UpsetPlotter:
     max_subset: int = 20
 
     @functools.cached_property
-    def _magick(self):
-        return shutil.which('magick')
-
-    @functools.cached_property
     def _colormap(self):
         return Colormap('seaborn:crest')([0.2, 0.5, 0.8])
 
@@ -47,18 +69,13 @@ class _UpsetPlotter:
         d = self.conf.dirs.analysis
         name = f'{self.bldg}-{self.construction}-{self.cost}'
 
-        upset = self.by_upsetplot()
-        upset.plot(fig := plt.figure())
-        fig.savefig(path := d / f'0000.upset-upsetplot-{name}.png')
-        plt.close(fig)
+        with figure_context() as fig:
+            self.by_upsetplot().plot(fig)
+            _trim_figure(fig).save(filename=d / f'0000.upset-upsetplot-{name}.png')
 
-        if self._magick:
-            sp.check_output([self._magick, str(path), '-trim', str(path)])
-
-        upset = self.by_marsilea()
-        upset.render(fig := plt.figure())
-        fig.savefig(d / f'0000.upset-marsilea-{name}.png')
-        plt.close(fig)
+        with figure_context() as fig:
+            self.by_marsilea().render(fig)
+            fig.savefig(d / f'0000.upset-marsilea-{name}.png')
 
     def _data(self):
         lf = pl.scan_parquet(self.conf.source(self.bldg)).filter(
