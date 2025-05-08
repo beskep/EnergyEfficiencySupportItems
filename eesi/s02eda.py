@@ -5,7 +5,7 @@ import dataclasses as dc
 import functools
 import io
 import itertools
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import cyclopts
 import matplotlib.pyplot as plt
@@ -18,12 +18,16 @@ import shutup
 import wand.image
 from cmap import Colormap
 from loguru import logger
+from matplotlib.layout_engine import ConstrainedLayoutEngine
+from matplotlib.ticker import PercentFormatter
 
 from eesi import utils
 from eesi.config import BldgType, Config, Vars
 from eesi.utils._terminal import Progress
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import marsilea as ma
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
@@ -53,6 +57,11 @@ def _trim_figure(fig: Figure, pad: int | None = 10):
     return image
 
 
+app = utils.cli.App(
+    config=cyclopts.config.Toml('config.toml', use_commands_as_keys=False)
+)
+
+
 @dc.dataclass
 class _UpsetPlotter:
     conf: Config
@@ -65,17 +74,17 @@ class _UpsetPlotter:
     def _colormap(self):
         return Colormap('seaborn:crest')([0.2, 0.5, 0.8])
 
-    def __call__(self):
-        d = self.conf.dirs.analysis
+    def __call__(self, output: Path | None = None):
+        output = output or self.conf.dirs.analysis
         name = f'{self.bldg}-{self.construction}-{self.cost}'
 
         with figure_context() as fig:
             self.by_upsetplot().plot(fig)
-            _trim_figure(fig).save(filename=d / f'0000.upset-upsetplot-{name}.png')
+            _trim_figure(fig).save(filename=output / f'0000.upset-upsetplot-{name}.png')
 
         with figure_context() as fig:
             self.by_marsilea().render(fig)
-            fig.savefig(d / f'0000.upset-marsilea-{name}.png')
+            fig.savefig(output / f'0000.upset-marsilea-{name}.png')
 
     def _data(self):
         lf = pl.scan_parquet(self.conf.source(self.bldg)).filter(
@@ -164,17 +173,14 @@ class _UpsetPlotter:
         return upset
 
 
-app = utils.cli.App(
-    config=cyclopts.config.Toml('config.toml', use_commands_as_keys=False)
-)
-
-
 @app.command
 def upset(*, conf: Config):
     utils.mpl.MplTheme(0.8, constrained=False).grid().apply()
     shutup.please()
 
     plotter = _UpsetPlotter(conf, bldg=BldgType.RESIDENTIAL)
+    output = conf.dirs.analysis / '0000.upset'
+    output.mkdir(exist_ok=True)
 
     def it():
         for bldg, const, cost in itertools.product(
@@ -193,7 +199,110 @@ def upset(*, conf: Config):
         plotter.bldg = bldg
         plotter.construction = const
         plotter.cost = cost
-        plotter()
+        plotter(output)
+
+
+@dc.dataclass
+class _ConstructionAnalysis:
+    """유형별 시공 분포."""
+
+    conf: Config
+    VARIABLES: ClassVar[dict[BldgType, tuple[str, ...]]] = {
+        BldgType.RESIDENTIAL: (Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE),
+        BldgType.SOCIAL_SERVICE: (Vars.Social.STRATUM, Vars.Social.TARGET),
+    }
+
+    def analyse(
+        self,
+        bldg: BldgType,
+        category: str,
+        construction: str = Vars.CONSTR,
+    ):
+        data = (
+            pl.scan_parquet(self.conf.source(bldg))
+            .with_row_index()
+            .select(
+                'index',
+                category,
+                construction,
+                pl.len().over(category).alias('total'),
+            )
+            .explode(construction)
+            .drop_nulls(construction)
+            .group_by(category, construction, 'total')
+            .len('count')
+            .with_columns(ratio=pl.col('count') / pl.col('total'))
+            .sort(category, construction)
+            .collect()
+        )
+
+        # 전체 평균 시공률 순서
+        order = (
+            data.group_by(construction)
+            .agg(pl.sum('total', 'count'))
+            .with_columns(ratio=pl.col('count') / pl.col('total'))
+            .sort('ratio', descending=True)[construction]
+        )
+
+        col_wrap = utils.mpl.ColWrap(data[category].n_unique()).ncols
+
+        grid = (
+            sns.FacetGrid(data, col=category, col_wrap=col_wrap, height=3.2)
+            .map_dataframe(sns.barplot, x='ratio', y=construction, order=order)
+            .set_axis_labels('시공률', '')
+            .set_titles('')
+            .set_titles('{col_name}', loc='left', weight=500)
+        )
+
+        grid.axes.ravel()[0].set_xlim(0, 1)
+
+        percent_formatter = PercentFormatter(xmax=1)
+        for ax in grid.axes_dict.values():
+            ax.xaxis.set_major_formatter(percent_formatter)
+            ax.bar_label(ax.containers[0], fmt='{:.1%}', padding=2)
+
+        ConstrainedLayoutEngine().execute(grid.figure)
+
+        return grid, data
+
+    def __call__(self):
+        d = self.conf.dirs.analysis / '0001.시공률'
+        d.mkdir(exist_ok=True)
+
+        dfs: list[pl.DataFrame] = []
+
+        bldg: BldgType
+        for bldg, construction in itertools.product(  # type: ignore[assignment]
+            BldgType, [Vars.CONSTR, f'{Vars.CONSTR}(원본)']
+        ):
+            for var in self.VARIABLES[bldg]:
+                grid, data = self.analyse(bldg, var, construction=construction)
+                grid.savefig(d / f'0001.시공률-{bldg}-{var}-{construction}.png')
+                plt.close(grid.figure)
+
+                dfs.append(
+                    data.select(
+                        pl.lit(bldg).alias('building'),
+                        pl.lit(var).alias('variable'),
+                        pl.lit(construction).alias('construction'),
+                        pl.all(),
+                    ).rename(
+                        {var: 'category', f'{Vars.CONSTR}(원본)': Vars.CONSTR},
+                        strict=False,
+                    )
+                )
+
+        (
+            pl.concat(dfs)
+            .sort('building', 'variable', 'construction', 'category')
+            .write_excel(d.parent / '0001.시공률.xlsx', column_widths=120)
+        )
+
+
+@app.command
+def construction(*, conf: Config):
+    utils.mpl.MplTheme(0.8, constrained=False).grid().apply()
+    _ConstructionAnalysis(conf)()
 
 
 @dc.dataclass
@@ -221,7 +330,7 @@ class _ResidentialTypes:
         sns.barplot(data, x='count', y=v2, hue=v1, ax=ax)
         ax.set_xscale('log')
         ax.get_legend().set_title('주거실태 재분류')
-        fig.savefig(self.conf.dirs.analysis / '0001.주거실태 재분류.png')
+        fig.savefig(self.conf.dirs.analysis / '0101.주거실태 재분류.png')
 
     def heatmap_types_count(self):
         count = (
@@ -247,7 +356,7 @@ class _ResidentialTypes:
         )
         ax.yaxis.set_tick_params(rotation=0)
         ax.set_ylabel('')
-        fig.savefig(self.conf.dirs.analysis / '0001.주택유형.png')
+        fig.savefig(self.conf.dirs.analysis / '0101.주택유형.png')
         plt.close(fig)
 
     @functools.cached_property
@@ -294,7 +403,7 @@ class _ResidentialTypes:
         ax.set_ylabel('')
 
         fig.savefig(
-            self.conf.dirs.analysis / '0001.유형별 지원액'
+            self.conf.dirs.analysis / '0101.유형별 지원액'
             f'{"" if etc else "(기타 제외)"}'
             f'{"" if boiler else "(보일러 제외)"}.png'
         )
@@ -370,9 +479,26 @@ class _ResidentialTypes:
             itertools.starmap(self._anova, cases()), how='vertical_relaxed'
         )
         table.write_excel(
-            self.conf.dirs.analysis / '0001.가구 유형별 비용 ANOVA.xlsx',
+            self.conf.dirs.analysis / '0101.가구 유형별 비용 ANOVA.xlsx',
             column_widths=150,
         )
+
+
+@app.command
+def plot_regional(*, conf: Config):
+    for bldg in BldgType:
+        data = (
+            pl.scan_parquet(conf.source(bldg))
+            .select(pl.col(Vars.COST) / 10000, Vars.RLG)
+            .sort(Vars.RLG)
+            .collect()
+        )
+        fig, ax = plt.subplots()
+        sns.barplot(data, x=Vars.COST, y=Vars.RLG, ax=ax, seed=42)
+        ax.set_xlabel(f'{Vars.COST} (만원)')
+        ax.set_ylabel('')
+        fig.savefig(conf.dirs.analysis / f'0002.지역별 지원액-{bldg}.png')
+        plt.close(fig)
 
 
 @app.command
@@ -409,7 +535,7 @@ def plot_social(*, max_social_const: int = 8, conf: Config):
         ax.set_ylabel('')
         ax.set_title(f'{var}별 지원 금액')
 
-    fig.savefig(conf.dirs.analysis / '0002.사회복지시설 유형별 지원액.png')
+    fig.savefig(conf.dirs.analysis / '0202.사회복지시설 유형별 지원액.png')
     plt.close(fig)
 
     # 사회복지시설 유형(대상)별 시공 유형
@@ -442,25 +568,8 @@ def plot_social(*, max_social_const: int = 8, conf: Config):
         .map_dataframe(sns.barplot, x='len', y=const)
         .set_axis_labels('개수', '')
     )
-    grid.savefig(conf.dirs.analysis / '0002.사회복지시설 유형별 시공.png')
+    grid.savefig(conf.dirs.analysis / '0202.사회복지시설 유형별 시공.png')
     plt.close(grid.figure)
-
-
-@app.command
-def plot_regional(*, conf: Config):
-    for bldg in BldgType:
-        data = (
-            pl.scan_parquet(conf.source(bldg))
-            .select(pl.col(Vars.COST) / 10000, Vars.RLG)
-            .sort(Vars.RLG)
-            .collect()
-        )
-        fig, ax = plt.subplots()
-        sns.barplot(data, x=Vars.COST, y=Vars.RLG, ax=ax, seed=42)
-        ax.set_xlabel(f'{Vars.COST} (만원)')
-        ax.set_ylabel('')
-        fig.savefig(conf.dirs.analysis / f'0003.지역별 지원액-{bldg}.png')
-        plt.close(fig)
 
 
 if __name__ == '__main__':
