@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses as dc
 import functools
 import itertools
+import shutil
+import subprocess as sp
 from typing import TYPE_CHECKING
 
 import cyclopts
@@ -12,45 +14,63 @@ import pingouin as pg
 import polars as pl
 import polars.selectors as cs
 import seaborn as sns
+import shutup
 from cmap import Colormap
+from loguru import logger
 
 from eesi import utils
 from eesi.config import BldgType, Config, Vars
+from eesi.utils._terminal import Progress
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import marsilea as ma
     from matplotlib.axes import Axes
 
 
 @dc.dataclass
 class _UpsetPlotter:
-    data: pl.LazyFrame
+    conf: Config
+    bldg: BldgType
     construction: str = Vars.CONSTR  # membership
     cost: str = Vars.COST
     max_subset: int = 20
 
     @functools.cached_property
+    def _magick(self):
+        return shutil.which('magick')
+
+    @functools.cached_property
     def _colormap(self):
         return Colormap('seaborn:crest')([0.2, 0.5, 0.8])
 
-    def __call__(self, path: Path):
+    def __call__(self):
+        d = self.conf.dirs.analysis
+        name = f'{self.bldg}-{self.construction}-{self.cost}'
+
         upset = self.by_upsetplot()
         upset.plot(fig := plt.figure())
-        fig.savefig(path.parent / f'{path.stem}-upsetplot.png')
+        fig.savefig(path := d / f'0000.upset-upsetplot-{name}.png')
         plt.close(fig)
+
+        if self._magick:
+            sp.check_output([self._magick, str(path), '-trim', str(path)])
 
         upset = self.by_marsilea()
         upset.render(fig := plt.figure())
-        fig.savefig(path.parent / f'{path.stem}-marsilea.png')
+        fig.savefig(d / f'0000.upset-marsilea-{name}.png')
         plt.close(fig)
 
     def _data(self):
-        return self.data.filter(
+        lf = pl.scan_parquet(self.conf.source(self.bldg)).filter(
             pl.col(self.construction).is_not_null(),
             pl.col(self.construction).list.len() != 0,
         )
+
+        if self.bldg is BldgType.RESIDENTIAL:
+            cost = pl.col(Vars.COST) - pl.col(Vars.COST_CONTRACTOR)
+            lf = lf.with_columns(cost.alias(Vars.COST_MATERIAL))
+
+        return lf
 
     def by_upsetplot(self):
         from eesi import _upset  # noqa: PLC0415
@@ -134,15 +154,29 @@ app = utils.cli.App(
 
 @app.command
 def upset(*, conf: Config):
-    for bldg in BldgType:
-        plotter = _UpsetPlotter(data=pl.scan_parquet(conf.source(bldg)))
+    utils.mpl.MplTheme(0.8, constrained=False).grid().apply()
+    shutup.please()
 
-        for original in [False, True]:
-            suffix = '(원본)' if original else ''
-            constr = f'{Vars.CONSTR}{suffix}'
-            plotter.construction = constr
+    plotter = _UpsetPlotter(conf, bldg=BldgType.RESIDENTIAL)
 
-            plotter(conf.dirs.analysis / f'0000.upset-{bldg}{suffix}.png')
+    def it():
+        for bldg, const, cost in itertools.product(
+            BldgType,
+            [Vars.CONSTR, f'{Vars.CONSTR}(원본)'],
+            [Vars.COST, Vars.COST_CONTRACTOR, Vars.COST_MATERIAL],
+        ):
+            if bldg is BldgType.SOCIAL_SERVICE and cost != Vars.COST:
+                continue
+
+            yield bldg, const, cost
+
+    for bldg, const, cost in Progress.iter(list(it())):
+        logger.info(f'{bldg=} | {const=} | {cost=}')
+
+        plotter.bldg = bldg
+        plotter.construction = const
+        plotter.cost = cost
+        plotter()
 
 
 @dc.dataclass
@@ -413,5 +447,6 @@ def plot_regional(*, conf: Config):
 
 
 if __name__ == '__main__':
+    utils.terminal.LogHandler.set()
     utils.mpl.MplTheme(0.8).grid().apply()
     app()

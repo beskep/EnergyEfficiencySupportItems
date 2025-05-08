@@ -16,6 +16,7 @@ dependencies = [
     "pyside6>=6.9.0",
     "rich>=14.0.0",
     "seaborn>=0.13.2",
+    "shutup>=0.2.0",
     "upsetplot>=0.9.0",
     "whenever>=0.7.3",
     "xlsxwriter>=3.2.3",

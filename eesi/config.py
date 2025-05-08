@@ -21,7 +21,8 @@ class Vars:
 
     CONSTR: str = '시공내역'
     COST: str = '총지원금액'
-    CONTRACTOR_PAYMENTS: str = '시공업체계약금액'
+    COST_CONTRACTOR: str = '시공업체계약금액'
+    COST_MATERIAL: str = '관급자재비용'
 
     REGIONAL_LOCAL_GOV: str = '시도'  # 광역자치단체
     BASIC_LOCAL_GOV: str = '시군구'  # 기초자치단체
