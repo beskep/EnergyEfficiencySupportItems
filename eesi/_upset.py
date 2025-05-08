@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -11,76 +11,66 @@ from upsetplot import from_contents, from_indicators, from_memberships, util
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
+    from matplotlib.patches import Rectangle
 
 
 __all__ = ['UpSet', 'from_contents', 'from_indicators', 'from_memberships']
 
 
 class UpSet(upsetplot.UpSet):
-    def _label_sizes_fmt(self, where):
-        if self._show_counts is True:
-            count_fmt = '{:.0f}'
-        else:
-            count_fmt = self._show_counts
-            if '{' not in count_fmt:
-                count_fmt = util.to_new_pos_format(count_fmt)
+    def _label_sizes_format(self, where):
+        count_fmt = '{:.0f}' if self._show_counts is True else str(self._show_counts)
+
+        if '{' not in count_fmt:
+            count_fmt = util.to_new_pos_format(count_fmt)
 
         pct_fmt = '{:.1%}' if self._show_percentages is True else self._show_percentages
 
-        if count_fmt and pct_fmt:
-            fmt = (
-                f'{count_fmt}\n({pct_fmt})'
-                if where == 'top'
-                else f'{count_fmt} ({pct_fmt})'
-            )
+        def fmt(v: float):
+            if v.is_integer():
+                v = int(v)
 
-            def make_args(val):
-                return val, val / self.total
+            if count_fmt and pct_fmt:
+                t = f'{count_fmt}{"\n" if where == "top" else ""}({pct_fmt})'
+                return t.format(v, v / self.total)
 
-        elif count_fmt:
-            fmt = count_fmt
+            if count_fmt:
+                return count_fmt.format(v)
 
-            def make_args(val):
-                return (val,)
+            if pct_fmt:
+                return pct_fmt.format(v / self.total)
 
-        else:
-            fmt = pct_fmt
+            return ''
 
-            def make_args(val):
-                return (val / self.total,)
+        return fmt
 
-        return fmt, make_args
+    def _label_sizes(
+        self,
+        ax: Axes,
+        rects: Sequence[Rectangle],
+        where: Literal['right', 'left', 'top'],
+    ):
+        if not (self._show_counts or self._show_percentages):
+            return
 
-    def _label_sizes(self, ax: Axes, rects, where: Literal['right', 'left', 'top']):
-        fmt, make_args = self._label_sizes_fmt(where)
-
-        ha = {'right': 'left', 'left': 'right', 'top': 'center'}
-        kwargs: dict = {'va': 'center', 'ha': ha[where]}
-        margin: float = 0.1 * np.abs(
-            np.diff(ax.get_ylim() if where == 'top' else ax.get_xlim())
+        fmt = self._label_sizes_format(where)
+        kwargs: dict = {
+            'va': 'center',
+            'ha': {'right': 'left', 'left': 'right', 'top': 'center'}[where],
+        }
+        margin = 0.1 * float(
+            np.abs(np.diff(ax.get_ylim() if where == 'top' else ax.get_xlim()))
         )
 
-        def text(rect):
-            value: float = (
-                rect.get_height() + rect.get_y()
-                if where == 'top'
-                else rect.get_width() + rect.get_x()
-            )
-            if value.is_integer():
-                value = int(value)
-
+        for rect in rects:
             if where == 'top':
-                xy: tuple[float, float] = (
-                    rect.get_x() + rect.get_width() * 0.5,
-                    value + margin,
-                )
+                value = rect.get_height() + rect.get_y()
+                xy = (rect.get_x() + rect.get_width() * 0.5, value + margin)
             else:
+                value = rect.get_width() + rect.get_x()
                 xy = (value + margin, rect.get_y() + rect.get_height() * 0.5)
 
-            ax.text(*xy, s=fmt.format(*make_args(value)), **kwargs)
-
-        for rect in rects:
-            text(rect)
+            ax.text(*xy, s=fmt(value), **kwargs)
 
     def _plot_stacked_bars(self, ax, by, sum_over, colors, title):
         df: pd.DataFrame = self._df.set_index('_bin').set_index(
