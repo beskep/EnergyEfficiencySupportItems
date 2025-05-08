@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pingouin as pg
 import polars as pl
+import polars.selectors as cs
 import seaborn as sns
 from cmap import Colormap
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import marsilea as ma
+    from matplotlib.axes import Axes
 
 
 @dc.dataclass
@@ -150,8 +152,25 @@ class _ResidentialTypes:
 
     def __post_init__(self):
         self.lf = pl.scan_parquet(self.conf.source(BldgType.RESIDENTIAL)).select(
-            Vars.COST, Vars.CONSTR, Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE
+            Vars.COST,
+            Vars.CONSTR,
+            cs.starts_with(Vars.Resid.OWNERSHIP),
+            Vars.Resid.RESID_TYPE,
         )
+
+    def plot_ownership(self):
+        """원본 주거실태 개수."""
+        v1 = Vars.Resid.OWNERSHIP
+        v2 = f'{Vars.Resid.OWNERSHIP}(원본)'
+        data = (
+            self.lf.select(v1, v2).group_by(v1, v2).len('count').sort('count').collect()
+        )
+
+        fig, ax = plt.subplots()
+        sns.barplot(data, x='count', y=v2, hue=v1, ax=ax)
+        ax.set_xscale('log')
+        ax.get_legend().set_title('주거실태 재분류')
+        fig.savefig(self.conf.dirs.analysis / '0001.주거실태 재분류.png')
 
     def heatmap_types_count(self):
         count = (
@@ -306,13 +325,91 @@ class _ResidentialTypes:
 
 
 @app.command
-def residential_type(conf: Config):
+def plot_residential(*, conf: Config):
     r = _ResidentialTypes(conf)
+
     r.anova()
+    r.plot_ownership()
     r.heatmap_types_count()
 
     for e, b in itertools.product([True, False], [True, False]):
         r.plot_cost(etc=e, boiler=b)
+
+
+@app.command
+def plot_social(*, max_social_const: int = 8, conf: Config):
+    # 사회복지시설 유형
+    data = (
+        pl.scan_parquet(conf.source(BldgType.SOCIAL_SERVICE))
+        .select(pl.col(Vars.COST) / 10000, Vars.Social.STRATUM, Vars.Social.TARGET)
+        .collect()
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=utils.mpl.MplFigSize(24, 9).inch())
+    ax: Axes
+    for var, elements, ax in zip(
+        [Vars.Social.STRATUM, Vars.Social.TARGET],
+        [Vars.Social.STRATUM_ELEMENTS, Vars.Social.TARGET_ELEMENTS],
+        axes,
+        strict=True,
+    ):
+        sns.violinplot(data, x=Vars.COST, y=var, order=elements, ax=ax)
+        ax.set_xlabel(f'{Vars.COST} (만원)')
+        ax.set_ylabel('')
+        ax.set_title(f'{var}별 지원 금액')
+
+    fig.savefig(conf.dirs.analysis / '0002.사회복지시설 유형별 지원액.png')
+    plt.close(fig)
+
+    # 사회복지시설 유형(대상)별 시공 유형
+    const = f'{Vars.CONSTR}(원본)'
+    data = (
+        pl.scan_parquet(conf.source(BldgType.SOCIAL_SERVICE))
+        .select(Vars.Social.TARGET, pl.col(const).list.sort().list.join(', '))
+        .group_by(Vars.Social.TARGET, const)
+        .len()
+        .sort(Vars.Social.TARGET, 'len', descending=[False, True])
+        .with_columns(
+            pl.col('len')
+            .rank('min', descending=True)
+            .over(Vars.Social.TARGET)
+            .alias('rank')
+        )
+        .filter(pl.col('rank') <= max_social_const)
+        .collect()
+    )
+    grid = (
+        sns.FacetGrid(
+            data,
+            col=Vars.Social.TARGET,
+            col_order=Vars.Social.TARGET_ELEMENTS,
+            col_wrap=2,
+            sharey=False,
+            height=3,
+            aspect=16 / 9,
+        )
+        .map_dataframe(sns.barplot, x='len', y=const)
+        .set_axis_labels('개수', '')
+    )
+    grid.savefig(conf.dirs.analysis / '0002.사회복지시설 유형별 시공.png')
+    plt.close(grid.figure)
+
+
+@app.command
+def plot_regional(*, conf: Config):
+    for bldg in BldgType:
+        data = (
+            pl.scan_parquet(conf.source(bldg))
+            .select(pl.col(Vars.COST) / 10000, Vars.RLG)
+            .sort(Vars.RLG)
+            .collect()
+        )
+        fig, ax = plt.subplots()
+        sns.barplot(data, x=Vars.COST, y=Vars.RLG, ax=ax, seed=42)
+        ax.set_xlabel(f'{Vars.COST} (만원)')
+        ax.set_ylabel('')
+        fig.savefig(conf.dirs.analysis / f'0003.지역별 지원액-{bldg}.png')
+        plt.close(fig)
 
 
 if __name__ == '__main__':

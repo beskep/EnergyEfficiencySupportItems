@@ -18,9 +18,15 @@ class BldgType(enum.StrEnum):
 class Vars:
     YEAR: str = '사업연도'
     KEY: str = '기준키'
+
     CONSTR: str = '시공내역'
     COST: str = '총지원금액'
     CONTRACTOR_PAYMENTS: str = '시공업체계약금액'
+
+    REGIONAL_LOCAL_GOV: str = '시도'  # 광역자치단체
+    BASIC_LOCAL_GOV: str = '시군구'  # 기초자치단체
+    RLG = REGIONAL_LOCAL_GOV
+    BLG = BASIC_LOCAL_GOV
 
     class Residual:
         # 가구
@@ -31,6 +37,15 @@ class Vars:
 
     class SocialService:
         # 사회복지시설
+        STRATUM: str = '보호구분'
+        STRATUM_ELEMENTS: tuple[str, ...] = (
+            '일반',
+            '차상위계층',
+            '국민기초생활수급가구',
+        )
+        TARGET: str = '시설유형'
+        TARGET_ELEMENTS: tuple[str, ...] = ('아동', '노인', '장애인', '기타')
+
         EXISTING_BOILER: str = '기존보일러유무'
         EXISTING_BOILER_FUEL: str = '기존보일러연료'
         EXISTING_BOILER_FUEL_COLS: tuple[str, ...] = (
