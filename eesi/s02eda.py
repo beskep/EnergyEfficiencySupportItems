@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import dataclasses as dc
 import functools
 import io
@@ -24,7 +23,7 @@ from matplotlib.ticker import PercentFormatter
 
 from eesi import utils
 from eesi.config import BldgType, Config, Vars
-from eesi.utils._terminal import Progress
+from eesi.utils.terminal import Progress
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -33,14 +32,6 @@ if TYPE_CHECKING:
     import marsilea as ma
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
-
-
-@contextlib.contextmanager
-def figure_context(*args, **kwargs):
-    # TODO to utils
-    fig = plt.figure(*args, **kwargs)
-    yield fig
-    plt.close(fig)
 
 
 def _trim_figure(fig: Figure, pad: int | None = 10):
@@ -80,11 +71,11 @@ class _UpsetPlotter:
         output = output or self.conf.dirs.analysis
         name = f'{self.bldg}-{self.construction}-{self.cost}'
 
-        with figure_context() as fig:
+        with utils.mpl.figure_context() as fig:
             self.by_upsetplot().plot(fig)
             _trim_figure(fig).save(filename=output / f'0000.upset-upsetplot-{name}.png')
 
-        with figure_context() as fig:
+        with utils.mpl.figure_context() as fig:
             self.by_marsilea().render(fig)
             fig.savefig(output / f'0000.upset-marsilea-{name}.png')
 
