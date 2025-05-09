@@ -602,6 +602,89 @@ def residential(*, conf: Config):
 
 
 @app.command
+def residential_cost(
+    *,
+    scale=0.6,
+    pad=45,
+    max_intersection_count: int = 10,
+    conf: Config,
+):
+    """시공 유형별 가구 관급자재, 시공업체계약금액."""
+    utils.mpl.MplTheme(scale).grid().apply()
+    material = pl.col(Vars.COST) - pl.col(Vars.COST_CONTRACTOR)
+    data = (
+        pl.scan_parquet(conf.source(BldgType.RESIDENTIAL))
+        .drop_nulls(f'{Vars.CONSTR}(원본)')
+        .filter(pl.col(Vars.CONSTR).list.len() != 0)
+        .select(
+            # '진단'이 제일 처음으로
+            pl.col(Vars.CONSTR)
+            .list.eval(pl.element().replace({'진단': ''}))
+            .list.sort()
+            .list.eval(pl.element().replace({'': '진단'}))
+            .list.join(', '),
+            pl.col(Vars.COST_CONTRACTOR) / 10000,
+            material.truediv(10000).alias(Vars.COST_MATERIAL),
+        )
+        .with_columns(pl.len().over(Vars.CONSTR).alias('count'))
+        .with_columns(
+            pl.col('count').rank('dense', descending=True).alias('rank'),
+            (pl.col('count') / pl.len()).alias('ratio'),
+        )
+        .filter(pl.col('rank') <= max_intersection_count)
+        .sort('count', descending=True)
+        .collect()
+    )
+
+    const_order = data[Vars.CONSTR].unique(maintain_order=True)
+    counts = data.unique(Vars.CONSTR, maintain_order=True)
+
+    axes: tuple[Axes, Axes]
+    fig, axes = plt.subplots(1, 2)
+
+    sns.barplot(counts, x='count', y=Vars.CONSTR, order=const_order, ax=axes[0])
+
+    axes[0].invert_xaxis()
+    axes[0].bar_label(
+        axes[0].containers[0],  # type: ignore[arg-type]
+        labels=[f'{x:.1%}' for x in counts['ratio']],
+        label_type='edge',
+        padding=2,
+        color='.25',
+    )
+    sns.violinplot(
+        data.unpivot(
+            [Vars.COST_CONTRACTOR, Vars.COST_MATERIAL], index=Vars.CONSTR
+        ).with_columns(pl.col('variable').str.strip_suffix('액')),
+        x='value',
+        y=Vars.CONSTR,
+        order=const_order,
+        hue='variable',
+        ax=axes[1],
+        linewidth=0.5,
+        density_norm='width',
+    )
+
+    axes[0].set_yticklabels([])
+    axes[0].set_xlabel('건수')
+    axes[1].set_xlabel('비용 (만원)')
+    axes[1].get_legend().set_title('')
+
+    axes[1].yaxis.set_tick_params(pad=pad)
+    for tick in axes[1].yaxis.get_majorticklabels():
+        tick.set_horizontalalignment('center')
+
+    axes[0].margins(x=0.2, y=0.01)
+    axes[1].margins(y=0.01)
+
+    for ax in axes:
+        ax.set_ylabel('')
+        ax.autoscale_view()
+
+    fig.savefig(conf.dirs.analysis / '0101.자재-시공업체 금액.png')
+
+
+@app.command
 def social(*, max_social_const: int = 8, conf: Config):
     """사회복지시설 유형별 분석."""
     # 사회복지시설 유형
