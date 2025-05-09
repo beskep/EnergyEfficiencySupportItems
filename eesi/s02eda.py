@@ -5,9 +5,10 @@ import dataclasses as dc
 import functools
 import io
 import itertools
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import cyclopts
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pingouin as pg
@@ -26,6 +27,7 @@ from eesi.config import BldgType, Config, Vars
 from eesi.utils._terminal import Progress
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     import marsilea as ma
@@ -207,10 +209,69 @@ class _ConstructionAnalysis:
     """유형별 시공 분포."""
 
     conf: Config
+
     VARIABLES: ClassVar[dict[BldgType, tuple[str, ...]]] = {
         BldgType.RESIDENTIAL: (Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE),
         BldgType.SOCIAL_SERVICE: (Vars.Social.STRATUM, Vars.Social.TARGET),
     }
+
+    class _VarOrder(NamedTuple):
+        var: str
+        order: Sequence[str] | None
+
+    @staticmethod
+    def _grid(
+        data: pl.DataFrame,
+        y: _VarOrder,
+        col: _VarOrder,
+        *,
+        threshold: float = 0.25,
+    ):
+        col_wrap = utils.mpl.ColWrap(data[col.var].n_unique()).ncols
+
+        grid = (
+            sns.FacetGrid(data, col=col.var, col_wrap=col_wrap, col_order=col.order)
+            .map_dataframe(
+                sns.barplot,
+                x='supported',
+                y=y.var,
+                order=y.order,
+                err_kws={'alpha': 0.75},
+                seed=42,
+            )
+            .set_axis_labels('시공률', '')
+            .set_titles('')
+            .set_titles('{col_name}', loc='left', weight=500, size='large')
+        )
+
+        grid.axes.ravel()[0].set_xlim(0, 1)
+
+        percent_formatter = PercentFormatter(xmax=1)
+        label_style = {'fmt': '{:.1%}', 'weight': 500, 'size': 'small'}
+        center_color = utils.mpl.text_color(sns.color_palette(n_colors=1)[0])
+
+        for ax in grid.axes_dict.values():
+            ax.xaxis.set_major_formatter(percent_formatter)
+            container: Any = ax.containers[0]
+            centers = ax.bar_label(
+                container, label_type='center', color=center_color, **label_style
+            )
+            edges = ax.bar_label(
+                container, label_type='edge', padding=10, **label_style
+            )
+
+            for center, edge in zip(centers, edges, strict=True):
+                value = float(center.get_text().removesuffix('%')) / 100
+
+                if value < threshold:
+                    center.remove()
+                else:
+                    edge.remove()
+
+        grid.figure.set_size_inches(mpl.rcParams['figure.figsize'])
+        ConstrainedLayoutEngine().execute(grid.figure)
+
+        return grid
 
     def analyse(
         self,
@@ -221,87 +282,111 @@ class _ConstructionAnalysis:
         data = (
             pl.scan_parquet(self.conf.source(bldg))
             .with_row_index()
-            .select(
-                'index',
-                category,
-                construction,
-                pl.len().over(category).alias('total'),
-            )
+            # NOTE 시공 내역이 비었으나 지원 금액이 존재하는 record가 있음
+            .drop_nulls(f'{Vars.CONSTR}(원본)')
+            .select('index', category, construction)
             .explode(construction)
-            .drop_nulls(construction)
-            .group_by(category, construction, 'total')
-            .len('count')
-            .with_columns(ratio=pl.col('count') / pl.col('total'))
-            .sort(category, construction)
             .collect()
         )
 
-        # 전체 평균 시공률 순서
-        order = (
-            data.group_by(construction)
-            .agg(pl.sum('total', 'count'))
-            .with_columns(ratio=pl.col('count') / pl.col('total'))
-            .sort('ratio', descending=True)[construction]
+        # index, category 조합
+        cross = (
+            data.select('index')
+            .unique()
+            .join(data.select(pl.col(construction).drop_nulls()).unique(), how='cross')
         )
 
-        col_wrap = utils.mpl.ColWrap(data[category].n_unique()).ncols
-
-        grid = (
-            sns.FacetGrid(data, col=category, col_wrap=col_wrap, height=3.2)
-            .map_dataframe(sns.barplot, x='ratio', y=construction, order=order)
-            .set_axis_labels('시공률', '')
-            .set_titles('')
-            .set_titles('{col_name}', loc='left', weight=500)
+        # 시공 지원 여부(supported)를 0, 1로 표시
+        binary = (
+            cross.join(data.select('index', category).unique(), on='index', how='left')
+            .join(
+                data.select('index', construction)
+                .unique()
+                .with_columns(pl.lit(1).alias('supported')),
+                on=['index', construction],
+                how='left',
+            )
+            .with_columns(pl.col('supported').fill_null(0))
         )
 
-        grid.axes.ravel()[0].set_xlim(0, 1)
+        ratio = (
+            binary.group_by(category, construction)
+            .agg(pl.mean('supported').alias('지원률'))
+            .sort(pl.all())
+        )
 
-        percent_formatter = PercentFormatter(xmax=1)
-        for ax in grid.axes_dict.values():
-            ax.xaxis.set_major_formatter(percent_formatter)
-            ax.bar_label(ax.containers[0], fmt='{:.1%}', padding=2)
+        def order(var: str):
+            return (
+                binary.group_by(var)
+                .agg(pl.mean('supported'))
+                .sort('supported', descending=True)[var]
+                .to_list()
+            )
 
-        ConstrainedLayoutEngine().execute(grid.figure)
+        cat_order = self._VarOrder(category, order=order(category))
+        const_order = self._VarOrder(construction, order=order(construction))
+        grids = {
+            'category': self._grid(binary, y=const_order, col=cat_order),
+            'construction': self._grid(binary, y=cat_order, col=const_order),
+        }
 
-        return grid, data
+        return ratio, grids
+
+    def _keys(self):
+        bldg: BldgType
+        for bldg, const in itertools.product(  # type: ignore[assignment]
+            BldgType, [Vars.CONSTR, f'{Vars.CONSTR}(원본)']
+        ):
+            for var in self.VARIABLES[bldg]:
+                yield bldg, const, var
 
     def __call__(self):
         d = self.conf.dirs.analysis / '0001.시공률'
         d.mkdir(exist_ok=True)
 
-        dfs: list[pl.DataFrame] = []
+        def it():
+            for bldg, const, var in Progress.iter(list(self._keys())):
+                logger.info(f'{bldg=} | {const=} | {var=}')
 
-        bldg: BldgType
-        for bldg, construction in itertools.product(  # type: ignore[assignment]
-            BldgType, [Vars.CONSTR, f'{Vars.CONSTR}(원본)']
-        ):
-            for var in self.VARIABLES[bldg]:
-                grid, data = self.analyse(bldg, var, construction=construction)
-                grid.savefig(d / f'0001.시공률-{bldg}-{var}-{construction}.png')
-                plt.close(grid.figure)
+                data, grids = self.analyse(bldg, var, const)
 
-                dfs.append(
+                for col, grid in grids.items():
+                    grid.savefig(d / f'0001.시공률-{bldg}-{var}-{const}-{col}.png')
+                    plt.close(grid.figure)
+
+                yield (
                     data.select(
                         pl.lit(bldg).alias('building'),
                         pl.lit(var).alias('variable'),
-                        pl.lit(construction).alias('construction'),
+                        pl.lit(const).alias('construction'),
                         pl.all(),
-                    ).rename(
+                    )
+                    .rename(
                         {var: 'category', f'{Vars.CONSTR}(원본)': Vars.CONSTR},
                         strict=False,
                     )
+                    .with_columns()
                 )
 
         (
-            pl.concat(dfs)
+            pl.concat(it())
             .sort('building', 'variable', 'construction', 'category')
             .write_excel(d.parent / '0001.시공률.xlsx', column_widths=120)
         )
 
 
 @app.command
-def construction(*, conf: Config):
-    utils.mpl.MplTheme(0.8, constrained=False).grid().apply()
+def construction(*, width: float = 24, aspect=9 / 16, conf: Config):
+    (
+        utils.mpl.MplTheme(
+            0.8,
+            constrained=False,
+            fig_size=(width, None, aspect),
+            rc={'lines.solid_capstyle': 'projecting'},
+        )
+        .grid()
+        .apply()
+    )
     _ConstructionAnalysis(conf)()
 
 
