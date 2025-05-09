@@ -10,14 +10,15 @@ import cyclopts
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import pingouin as pg
 import polars as pl
 import polars.selectors as cs
 import seaborn as sns
 import shutup
+import squarify
 import wand.image
 from cmap import Colormap
 from loguru import logger
+from matplotlib.figure import Figure
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.ticker import PercentFormatter
 
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
 
     import marsilea as ma
     from matplotlib.axes import Axes
-    from matplotlib.figure import Figure
 
 
 def _trim_figure(fig: Figure, pad: int | None = 10):
@@ -409,7 +409,7 @@ class _ResidentialTypes:
         ax.get_legend().set_title('주거실태 재분류')
         fig.savefig(self.conf.dirs.analysis / '0101.주거실태 재분류.png')
 
-    def heatmap_types_count(self):
+    def plot_types_count(self):
         count = (
             self.lf.group_by(Vars.Resid.RESID_TYPE, Vars.Resid.OWNERSHIP)
             .len()
@@ -435,6 +435,99 @@ class _ResidentialTypes:
         ax.set_ylabel('')
         fig.savefig(self.conf.dirs.analysis / '0101.주택유형.png')
         plt.close(fig)
+
+    @staticmethod
+    def _plot_const_ratio(
+        data: pl.DataFrame,
+        types: Sequence[str],
+        output: Path,
+        threshold: float = 0.05,
+    ):
+        data_etc = (
+            data.with_columns(
+                pl.when(pl.col('ratio') < threshold)
+                .then(pl.lit('기타'))
+                .otherwise(pl.col(Vars.CONSTR))
+                .alias(Vars.CONSTR)
+            )
+            .group_by([*types, Vars.CONSTR, 'total'])
+            .agg(pl.sum('count'))
+            .with_columns(ratio=pl.col('count') / pl.col('total'))
+            .with_columns(
+                label=pl.format(
+                    '{}\n({}%)', Vars.CONSTR, pl.col('ratio').mul(100).round(1)
+                ),
+                key=pl.when(pl.col(Vars.CONSTR) == '기타')
+                .then(pl.lit(-1))
+                .otherwise(pl.col('ratio')),
+            )
+            .sort([*types, 'key'], descending=[False, False, True])
+        )
+
+        pie_colors = tuple(Colormap('tol:light-alt').color_stops.color_array)
+        tree_cmap = Colormap('cmasher:ocean')
+        rng = np.random.default_rng(seed=42)
+
+        for t, df in Progress.iter(
+            data_etc.group_by(types, maintain_order=True),
+            total=data_etc.select(types).n_unique(),
+        ):
+            name = '-'.join(map(str, t))
+
+            # pie
+            fig = Figure()
+            ax = fig.add_subplot()
+            ax.pie(
+                df['ratio'].to_numpy(),
+                labels=df['label'].to_list(),
+                startangle=90,
+                colors=pie_colors,
+                counterclock=False,
+                wedgeprops={'alpha': 0.75},
+            )
+            _trim_figure(fig).save(filename=output / f'pie-{name}.png')
+
+            # treemap
+            fig = Figure()
+            ax = fig.add_subplot()
+            colors = tree_cmap(rng.uniform(0.5, 0.8, df.height))
+            rng.uniform()
+            squarify.plot(
+                sizes=df['count'],
+                label=df['label'],
+                color=colors,
+                ax=ax,
+                bar_kwargs={'alpha': 0.9},
+                text_kwargs={'weight': 500},
+            )
+            ax.set_axis_off()
+            fig.savefig(output / f'treemap-{name}.png')
+
+    def plot_const_ratio(self):
+        types = [Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE]
+        data = (
+            self.lf.filter(pl.col(Vars.CONSTR).list.len() != 0)
+            .group_by(*types, Vars.CONSTR)
+            .len('count')
+            .sort([*types, 'count'], descending=[False, False, True])
+            .with_columns(
+                # '진단'을 제일 처음으로
+                pl.col(Vars.CONSTR)
+                .list.eval(pl.element().replace({'진단': ''}))
+                .list.sort()
+                .list.eval(pl.element().replace({'': '진단'}))
+                .list.join(', '),
+                total=pl.sum('count').over(types),
+            )
+            .with_columns(ratio=pl.col('count') / pl.col('total'))
+            .collect()
+        )
+
+        output = self.conf.dirs.analysis / '0101.주거 시공 비율'
+        output.mkdir(exist_ok=True)
+
+        data.write_excel(output.parent / f'{output.name}.xlsx', column_widths=150)
+        self._plot_const_ratio(data=data, types=types, output=output)
 
     @functools.cached_property
     def _cost_palette(self):
@@ -486,7 +579,7 @@ class _ResidentialTypes:
         )
         plt.close(fig)
 
-    def _data(self, ownership: str, resid_type: str):
+    def _anova_data(self, ownership: str, resid_type: str):
         lf = self.lf.with_columns(pl.col(Vars.COST) / 10000)  # 만원
 
         match ownership:
@@ -518,7 +611,9 @@ class _ResidentialTypes:
         ownership: str,
         resid_type: str,
     ) -> pl.DataFrame:
-        lf, between = self._data(ownership, resid_type)
+        import pingouin as pg  # noqa: PLC0415
+
+        lf, between = self._anova_data(ownership, resid_type)
 
         anova = pg.anova(
             lf.collect().to_pandas(),
@@ -586,7 +681,8 @@ def residential(*, conf: Config):
 
     r.anova()
     r.plot_ownership()
-    r.heatmap_types_count()
+    r.plot_types_count()
+    r.plot_const_ratio()
 
     for e, b in itertools.product([True, False], [True, False]):
         r.plot_cost(etc=e, boiler=b)
@@ -672,11 +768,11 @@ def residential_cost(
         ax.set_ylabel('')
         ax.autoscale_view()
 
-    fig.savefig(conf.dirs.analysis / '0101.자재-시공업체 금액.png')
+    fig.savefig(conf.dirs.analysis / '0102.주거 자재-시공업체 금액.png')
 
 
 @app.command
-def social(*, max_social_const: int = 8, conf: Config):
+def social(*, max_const: int = 8, conf: Config):
     """사회복지시설 유형별 분석."""
     # 사회복지시설 유형
     data = (
@@ -715,7 +811,7 @@ def social(*, max_social_const: int = 8, conf: Config):
             .over(Vars.Social.TARGET)
             .alias('rank')
         )
-        .filter(pl.col('rank') <= max_social_const)
+        .filter(pl.col('rank') <= max_const)
         .collect()
     )
     grid = (
