@@ -377,6 +377,7 @@ class _ConstructionAnalysis:
 
 @app.command
 def construction(*, width: float = 24, aspect=9 / 16, conf: Config):
+    """유형별 시공률."""
     (
         utils.mpl.MplTheme(
             0.8,
@@ -570,7 +571,8 @@ class _ResidentialTypes:
 
 
 @app.command
-def plot_regional(*, conf: Config):
+def regional_cost(*, conf: Config):
+    """지역별 지원액."""
     for bldg in BldgType:
         data = (
             pl.scan_parquet(conf.source(bldg))
@@ -587,7 +589,8 @@ def plot_regional(*, conf: Config):
 
 
 @app.command
-def plot_residential(*, conf: Config):
+def residential(*, conf: Config):
+    """가구 유형별 분석."""
     r = _ResidentialTypes(conf)
 
     r.anova()
@@ -599,7 +602,8 @@ def plot_residential(*, conf: Config):
 
 
 @app.command
-def plot_social(*, max_social_const: int = 8, conf: Config):
+def social(*, max_social_const: int = 8, conf: Config):
+    """사회복지시설 유형별 분석."""
     # 사회복지시설 유형
     data = (
         pl.scan_parquet(conf.source(BldgType.SOCIAL_SERVICE))
