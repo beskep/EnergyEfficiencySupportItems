@@ -37,7 +37,7 @@ class Preprocess:
     }
     CONSTRUCTION_EXCLUDES: tuple[str, ...] = (
         '가구',
-        '곰팡이 ',
+        '곰팡이',
         '선풍기',
         '중문',
         '기타',
@@ -171,6 +171,9 @@ def prep(*, samples: int = 1000, conf: Config):
 
         src = conf.dirs.data / f'0000.{bldg}.parquet'
         data = Preprocess.preprocess(src).collect()
+
+        if (error := data.filter(pl.col(Vars.CONSTR).list.contains('ERROR'))).height:
+            rich.print(f'error={error}')
 
         data.write_parquet(conf.dirs.data / f'0001.{bldg}.parquet')
 
