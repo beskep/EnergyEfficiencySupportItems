@@ -89,7 +89,13 @@ class Preprocess:
                 .otherwise(pl.col(Vars.CONSTR))
                 .alias(Vars.CONSTR)
             )
-            .with_columns(pl.col(Vars.CONSTR).list.sort())
+            .with_columns(
+                # 시공내역 정렬 ('진단'을 제일 처음으로)
+                pl.col(Vars.CONSTR)
+                .list.eval(pl.element().replace({'진단': ''}))
+                .list.sort()
+                .list.eval(pl.element().replace({'': '진단'}))
+            )
             .with_columns(
                 pl.col(Vars.CONSTR).alias(f'{Vars.CONSTR}(원본)'),
                 pl.col(Vars.CONSTR).list.set_difference(cls.CONSTRUCTION_EXCLUDES),
@@ -100,6 +106,11 @@ class Preprocess:
 
         if Vars.Resid.REGISTRATION_DATE in schema:
             lf = lf.with_columns(pl.col(Vars.Resid.REGISTRATION_DATE).dt.date())
+
+        if Vars.COST_CONTRACTOR in schema:
+            # 관급자재비용 추가 (총지원금 - 시공업체계약금액)
+            cost = pl.col(Vars.COST) - pl.col(Vars.COST_CONTRACTOR)
+            lf = lf.with_columns(cost.alias(Vars.COST_MATERIAL))
 
         if Vars.Resid.OWNERSHIP in schema:
             expr = pl.col(Vars.Resid.OWNERSHIP)
@@ -115,7 +126,10 @@ class Preprocess:
         if Vars.Resid.SUPPORT_TYPE in schema:
             lf = lf.with_columns(
                 # NOTE 보호유형: 데이터 정제 어려움
-                pl.col(Vars.Resid.SUPPORT_TYPE).str.replace_all(' ', '').str.split(',')
+                pl.col(Vars.Resid.SUPPORT_TYPE)
+                .str.replace_all(' ', '')
+                .str.split(',')
+                .list.sort()
             )
 
         if Vars.Social.EXISTING_BOILER in schema:

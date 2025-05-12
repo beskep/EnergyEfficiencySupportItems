@@ -511,12 +511,7 @@ class _ResidentialTypes:
             .len('count')
             .sort([*types, 'count'], descending=[False, False, True])
             .with_columns(
-                # '진단'을 제일 처음으로
-                pl.col(Vars.CONSTR)
-                .list.eval(pl.element().replace({'진단': ''}))
-                .list.sort()
-                .list.eval(pl.element().replace({'': '진단'}))
-                .list.join(', '),
+                pl.col(Vars.CONSTR).list.join(', '),
                 total=pl.sum('count').over(types),
             )
             .with_columns(ratio=pl.col('count') / pl.col('total'))
@@ -704,12 +699,7 @@ def residential_cost(
         .drop_nulls(f'{Vars.CONSTR}(원본)')
         .filter(pl.col(Vars.CONSTR).list.len() != 0)
         .select(
-            # '진단'이 제일 처음으로
-            pl.col(Vars.CONSTR)
-            .list.eval(pl.element().replace({'진단': ''}))
-            .list.sort()
-            .list.eval(pl.element().replace({'': '진단'}))
-            .list.join(', '),
+            pl.col(Vars.CONSTR).list.join(', '),
             pl.col(Vars.COST_CONTRACTOR) / 10000,
             material.truediv(10000).alias(Vars.COST_MATERIAL),
         )
