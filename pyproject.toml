@@ -25,7 +25,8 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["mypy>=1.15.0", "ruff>=0.11.7"]
+bayesian = ["jax>=0.6.0", "pymc>=5.22.0"]
+dev = ["mypy>=1.15.0", "ruff>=0.11.7", "ty>=0.0.0a8"]
 
 [tool.ruff]
 preview = true

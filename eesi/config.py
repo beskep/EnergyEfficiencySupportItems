@@ -65,6 +65,7 @@ class Dirs:
     raw: Path = Path('0000.raw')
     data: Path = Path('0001.data')
     analysis: Path = Path('0100.analysis')
+    cost: Path = Path('0110.cost')
 
 
 @cyclopts.Parameter(name='*')
