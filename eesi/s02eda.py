@@ -57,6 +57,30 @@ app = utils.cli.App(
 )
 
 
+@app.command
+def count_constr(*, conf: Config):
+    import rich
+
+    pl.Config.set_tbl_rows(20)
+    console = rich.get_console()
+    constr = f'{Vars.CONSTR}(원본)'
+
+    for bldg in BldgType:
+        data = (
+            pl.scan_parquet(conf.source(bldg))
+            .select(Vars.YEAR, constr)
+            .explode(constr)
+            .group_by(Vars.YEAR, constr)
+            .len()
+            .collect()
+            .pivot(Vars.YEAR, index=constr, values='len', sort_columns=True)
+            .fill_null(0)
+            .with_columns(total=pl.sum_horizontal(pl.all().exclude(constr)))
+            .sort(constr)
+        )
+        console.print(bldg, data, '')
+
+
 @dc.dataclass
 class _UpsetPlotter:
     conf: Config
