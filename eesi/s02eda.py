@@ -1,10 +1,12 @@
+# ruff: noqa: PLC0415
+
 from __future__ import annotations
 
 import dataclasses as dc
 import functools
 import io
 import itertools
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 
 import cyclopts
 import matplotlib as mpl
@@ -67,9 +69,14 @@ class _UpsetPlotter:
     def _colormap(self):
         return Colormap('seaborn:crest')([0.2, 0.5, 0.8])
 
-    def __call__(self, output: Path | None = None):
+    @property
+    def cost_ttw(self):
+        return f'{self.cost}\n(만원)'
+
+    def __call__(self, output: Path | None = None, suffix: str | None = None):
         output = output or self.conf.dirs.analysis
-        name = f'{self.bldg}-{self.construction}-{self.cost}'
+        suffix = f'-{suffix}' if suffix else None
+        name = f'{self.bldg}-{self.construction}-{self.cost}{suffix}'
 
         with utils.mpl.figure_context() as fig:
             self.by_upsetplot().plot(fig)
@@ -80,9 +87,13 @@ class _UpsetPlotter:
             fig.savefig(output / f'0000.upset-marsilea-{name}.png')
 
     def _data(self):
-        lf = pl.scan_parquet(self.conf.source(self.bldg)).filter(
-            pl.col(self.construction).is_not_null(),
-            pl.col(self.construction).list.len() != 0,
+        lf = (
+            pl.scan_parquet(self.conf.source(self.bldg))
+            .filter(
+                pl.col(self.construction).is_not_null(),
+                pl.col(self.construction).list.len() != 0,
+            )
+            .with_columns(pl.col(self.cost).truediv(10000).alias(self.cost_ttw))
         )
 
         if self.bldg is BldgType.RESIDENTIAL:
@@ -92,17 +103,17 @@ class _UpsetPlotter:
         return lf
 
     def by_upsetplot(self):
-        from eesi import _upset  # noqa: PLC0415
+        from eesi import _upset
 
         df = (
             self._data()
-            .select(self.construction, self.cost, Vars.YEAR)
+            .select(self.construction, self.cost_ttw, Vars.YEAR)
             .collect()
             .to_pandas()
         )
         data = _upset.from_memberships(
             memberships=df[self.construction],
-            data=df[[self.cost, Vars.YEAR]],
+            data=df[[self.cost_ttw, Vars.YEAR]],
         )
         upset = _upset.UpSet(
             data,
@@ -114,12 +125,12 @@ class _UpsetPlotter:
         )
         upset.add_stacked_bars(Vars.YEAR, colors=self._colormap, title='연도별 건수')
         upset.add_catplot(
-            kind='violin', value=self.cost, linewidth=0.75, density_norm='width'
+            kind='violin', value=self.cost_ttw, linewidth=0.75, density_norm='width'
         )
         return upset
 
-    def by_marsilea(self) -> ma.upset.Upset:
-        import marsilea as ma  # noqa: PLC0415
+    def by_marsilea(self) -> ma.Upset:
+        import marsilea as ma
 
         df = (
             self._data()
@@ -136,7 +147,7 @@ class _UpsetPlotter:
             .set_index('index')
         )
 
-        data = ma.upset.UpsetData.from_memberships(
+        data = ma.UpsetData.from_memberships(
             items=df[self.construction],
             items_names=df.index,
             items_attrs=df[[self.cost, Vars.YEAR]],
@@ -149,7 +160,7 @@ class _UpsetPlotter:
                 else np.sort(cardinality)[::-1][self.max_subset - 1]
             )
 
-        upset = ma.upset.Upset(
+        upset = ma.Upset(
             data,
             sort_sets='ascending',
             sort_subsets='-cardinality',
@@ -167,8 +178,12 @@ class _UpsetPlotter:
 
 
 @app.command
-def upset(*, conf: Config):
-    utils.mpl.MplTheme(0.8, constrained=False).grid().apply()
+def upset(*, scale: float = 0.8, conf: Config):
+    (
+        utils.mpl.MplTheme(scale, constrained=False, rc={'legend.fontsize': 'x-small'})
+        .grid()
+        .apply()
+    )
     shutup.please()
 
     plotter = _UpsetPlotter(conf, bldg=BldgType.RESIDENTIAL)
@@ -192,14 +207,20 @@ def upset(*, conf: Config):
         plotter.bldg = bldg
         plotter.construction = const
         plotter.cost = cost
-        plotter(output)
+        plotter(output, suffix=f's={scale}')
 
 
 @dc.dataclass
 class _ConstructionAnalysis:
     """유형별 시공 분포."""
 
+    constr: Literal['raw', 'major', 'fan']
+    """원본, 기타 제외, 기타 제외+선풍기 포함"""
+
     conf: Config
+
+    plot: bool = True
+    minor: Sequence[str] = ('중문', '곰팡이', '바닥')
 
     VARIABLES: ClassVar[dict[BldgType, tuple[str, ...]]] = {
         BldgType.RESIDENTIAL: (Vars.Resid.OWNERSHIP, Vars.Resid.RESID_TYPE),
@@ -227,12 +248,13 @@ class _ConstructionAnalysis:
                 x='supported',
                 y=y.var,
                 order=y.order,
+                width=0.9,
                 err_kws={'alpha': 0.75},
                 seed=42,
             )
             .set_axis_labels('시공률', '')
             .set_titles('')
-            .set_titles('{col_name}', loc='left', weight=500, size='large')
+            .set_titles('{col_name}', loc='left', weight=500)
         )
 
         grid.axes.ravel()[0].set_xlim(0, 1)
@@ -268,40 +290,45 @@ class _ConstructionAnalysis:
         self,
         bldg: BldgType,
         category: str,
-        construction: str = Vars.CONSTR,
     ):
-        data = (
+        constr = f'{Vars.CONSTR}(원본)'
+        lf = (
             pl.scan_parquet(self.conf.source(bldg))
             .with_row_index()
             # NOTE 시공 내역이 비었으나 지원 금액이 존재하는 record가 있음
-            .drop_nulls(f'{Vars.CONSTR}(원본)')
-            .select('index', category, construction)
-            .explode(construction)
-            .collect()
+            .drop_nulls(constr)
+            .select('index', category, constr)
+            .explode(constr)
         )
+
+        if self.constr != 'raw':
+            remove = ['선풍기', *self.minor] if self.constr == 'major' else self.minor
+            lf = lf.filter(pl.col(constr).is_in(remove).not_())
+
+        data = lf.collect()
 
         # index, category 조합
         cross = (
             data.select('index')
             .unique()
-            .join(data.select(pl.col(construction).drop_nulls()).unique(), how='cross')
+            .join(data.select(pl.col(constr).drop_nulls()).unique(), how='cross')
         )
 
         # 시공 지원 여부(supported)를 0, 1로 표시
         binary = (
             cross.join(data.select('index', category).unique(), on='index', how='left')
             .join(
-                data.select('index', construction)
+                data.select('index', constr)
                 .unique()
-                .with_columns(pl.lit(1).alias('supported')),
-                on=['index', construction],
+                .with_columns(pl.lit(1, dtype=pl.Float64).alias('supported')),
+                on=['index', constr],
                 how='left',
             )
             .with_columns(pl.col('supported').fill_null(0))
         )
 
         ratio = (
-            binary.group_by(category, construction)
+            binary.group_by(category, constr)
             .agg(pl.mean('supported').alias('지원률'))
             .sort(pl.all())
         )
@@ -314,72 +341,88 @@ class _ConstructionAnalysis:
                 .to_list()
             )
 
-        cat_order = self._VarOrder(category, order=order(category))
-        const_order = self._VarOrder(construction, order=order(construction))
-        grids = {
-            'category': self._grid(binary, y=const_order, col=cat_order),
-            'construction': self._grid(binary, y=cat_order, col=const_order),
-        }
+        if self.plot:
+            cat_order = self._VarOrder(category, order=order(category))
+            const_order = self._VarOrder(constr, order=order(constr))
+            grids = {
+                'category': self._grid(binary, y=const_order, col=cat_order),
+                'construction': self._grid(binary, y=cat_order, col=const_order),
+            }
+        else:
+            grids = {}
 
         return ratio, grids
-
-    def _keys(self):
-        bldg: BldgType
-        for bldg, const in itertools.product(  # type: ignore[assignment]
-            BldgType, [Vars.CONSTR, f'{Vars.CONSTR}(원본)']
-        ):
-            for var in self.VARIABLES[bldg]:
-                yield bldg, const, var
 
     def __call__(self):
         d = self.conf.dirs.analysis / '0001.시공률'
         d.mkdir(exist_ok=True)
 
-        def it():
-            for bldg, const, var in Progress.iter(list(self._keys())):
-                logger.info(f'{bldg=} | {const=} | {var=}')
+        def keys():
+            for bldg in BldgType:
+                for var in self.VARIABLES[bldg]:
+                    yield bldg, var
 
-                data, grids = self.analyse(bldg, var, const)
+        def it():
+            for bldg, var in Progress.iter(list(keys())):
+                logger.info(f'{bldg=} | {var=}')
+
+                data, grids = self.analyse(bldg, var)
 
                 for col, grid in grids.items():
-                    grid.savefig(d / f'0001.시공률-{bldg}-{var}-{const}-{col}.png')
+                    name = f'0001.시공률-{self.constr}-{bldg}-{var}-{col}.png'
+                    grid.savefig(d / name)
                     plt.close(grid.figure)
 
                 yield (
                     data.select(
                         pl.lit(bldg).alias('building'),
                         pl.lit(var).alias('variable'),
-                        pl.lit(const).alias('construction'),
                         pl.all(),
-                    )
-                    .rename(
-                        {var: 'category', f'{Vars.CONSTR}(원본)': Vars.CONSTR},
-                        strict=False,
-                    )
-                    .with_columns()
+                    ).rename({var: 'category'}, strict=False)
                 )
 
         (
             pl.concat(it())
-            .sort('building', 'variable', 'construction', 'category')
-            .write_excel(d.parent / '0001.시공률.xlsx', column_widths=120)
+            .sort('building', 'variable', 'category')
+            .write_excel(
+                d.parent / f'0001.시공률-{self.constr}.xlsx',
+                column_widths=120,
+            )
         )
 
 
+@cyclopts.Parameter(name='plot')
+@dc.dataclass
+class _ConstructionPlotConf:
+    plot: bool = True
+    scale: float = 0.8
+    minor: bool = True
+    width: float = 24
+    height: float = 13.5
+
+
+_DEFAULT_CONSTR_PLOT_CONF = _ConstructionPlotConf()
+
+
 @app.command
-def construction(*, width: float = 24, aspect=9 / 16, conf: Config):
+def construction(
+    constr: Literal['raw', 'major', 'fan'] = 'raw',
+    *,
+    plot: _ConstructionPlotConf = _DEFAULT_CONSTR_PLOT_CONF,
+    conf: Config,
+):
     """유형별 시공률."""
     (
         utils.mpl.MplTheme(
-            0.8,
+            plot.scale,
             constrained=False,
-            fig_size=(width, None, aspect),
+            fig_size=(plot.width, plot.height),
             rc={'lines.solid_capstyle': 'projecting'},
         )
         .grid()
         .apply()
     )
-    _ConstructionAnalysis(conf)()
+    _ConstructionAnalysis(constr=constr, conf=conf, plot=plot.plot)()
 
 
 @dc.dataclass
@@ -405,7 +448,9 @@ class _ResidentialTypes:
 
         fig, ax = plt.subplots()
         sns.barplot(data, x='count', y=v2, hue=v1, ax=ax)
+        ax.set_xlabel('개수')
         ax.set_xscale('log')
+        ax.yaxis.set_tick_params(labelsize='small')
         ax.get_legend().set_title('주거실태 재분류')
         fig.savefig(self.conf.dirs.analysis / '0101.주거실태 재분류.png')
 
@@ -415,6 +460,12 @@ class _ResidentialTypes:
             .len()
             .collect()
             .drop_nulls()
+            .with_columns(
+                pl.col(Vars.Resid.RESID_TYPE).replace({
+                    '다가구주택': '다가구\n주택',
+                    '다세대주택': '다세대\n주택',
+                })
+            )
             .pivot(
                 Vars.Resid.RESID_TYPE,
                 index=Vars.Resid.OWNERSHIP,
@@ -429,7 +480,11 @@ class _ResidentialTypes:
 
         fig, ax = plt.subplots()
         sns.heatmap(
-            count, annot=True, fmt=',', cmap=Colormap('cmasher:ocean').to_mpl(), ax=ax
+            count,
+            annot=True,
+            fmt=',',
+            cmap=Colormap('cmasher:ocean').to_mpl(),
+            ax=ax,
         )
         ax.yaxis.set_tick_params(rotation=0)
         ax.set_ylabel('')
@@ -606,7 +661,7 @@ class _ResidentialTypes:
         ownership: str,
         resid_type: str,
     ) -> pl.DataFrame:
-        import pingouin as pg  # noqa: PLC0415
+        import pingouin as pg
 
         lf, between = self._anova_data(ownership, resid_type)
 
@@ -670,8 +725,15 @@ def regional_cost(*, conf: Config):
 
 
 @app.command
-def residential(*, conf: Config):
+def residential(
+    *,
+    scale: float = 0.8,
+    width: float = 16,
+    height: float = 9,
+    conf: Config,
+):
     """가구 유형별 분석."""
+    utils.mpl.MplTheme(scale, fig_size=(width, height)).grid().apply()
     r = _ResidentialTypes(conf)
 
     r.anova()

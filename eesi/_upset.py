@@ -57,6 +57,7 @@ class UpSet(upsetplot.UpSet):
         kwargs: dict = {
             'va': 'center',
             'ha': {'right': 'left', 'left': 'right', 'top': 'center'}[where],
+            'size': 'x-small',
         }
         margin = 0.1 * float(
             np.abs(np.diff(ax.get_ylim() if where == 'top' else ax.get_xlim()))
@@ -72,7 +73,7 @@ class UpSet(upsetplot.UpSet):
 
             ax.text(*xy, s=fmt(value), **kwargs)
 
-    def _plot_stacked_bars(self, ax, by, sum_over, colors, title):
+    def _plot_stacked_bars(self, ax: Axes, by, sum_over, colors, title):
         df: pd.DataFrame = self._df.set_index('_bin').set_index(
             by, append=True, drop=False
         )
