@@ -11,7 +11,7 @@ dependencies = [
     "loguru>=0.7.3",
     "marsilea>=0.5.2",
     "pingouin>=0.5.5",
-    "polars>=1.28.1,!=1.29.0",
+    "polars>=1.30.0",
     "pyarrow>=20.0.0",
     "pyside6>=6.9.0",
     "rich>=14.0.0",
@@ -26,7 +26,7 @@ dependencies = [
 
 [dependency-groups]
 bayesian = ["jax>=0.6.0", "pymc>=5.22.0"]
-dev = ["mypy>=1.15.0", "ruff>=0.11.7", "ty>=0.0.0a8"]
+dev = ["mypy>=1.15.0", "ruff>=0.11.7"]
 
 [tool.ruff]
 preview = true
