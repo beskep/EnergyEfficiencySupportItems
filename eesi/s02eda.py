@@ -20,6 +20,7 @@ import squarify
 import wand.image
 from cmap import Colormap
 from loguru import logger
+from matplotlib.container import BarContainer
 from matplotlib.figure import Figure
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.ticker import PercentFormatter
@@ -473,10 +474,28 @@ class _ResidentialTypes:
         fig, ax = plt.subplots()
         sns.barplot(data, x='count', y=v2, hue=v1, ax=ax)
         ax.set_xlabel('개수')
-        ax.set_xscale('log')
         ax.yaxis.set_tick_params(labelsize='small')
-        ax.get_legend().set_title('주거실태 재분류')
+
+        for container in ax.containers:
+            assert isinstance(container, BarContainer)
+            ax.bar_label(
+                container,
+                fmt=lambda x: f'{int(x):,}',
+                padding=2,
+                color='0.25',
+                fontsize='small',
+            )
+
+        if legend := ax.get_legend():
+            legend.set_title('주거실태 재분류')
+
+        ax.margins(x=0.12)
+        ax.autoscale_view(scaley=False)
+
         fig.savefig(self.conf.dirs.analysis / '0101.주거실태 재분류.png')
+        data.write_excel(
+            self.conf.dirs.analysis / '0101.주거실태 재분류.xlsx', column_widths=120
+        )
 
     def plot_types_count(self):
         count = (
@@ -831,7 +850,9 @@ def residential_cost(
     axes[0].set_yticklabels([])
     axes[0].set_xlabel('건수')
     axes[1].set_xlabel('비용 (만원)')
-    axes[1].get_legend().set_title('')
+
+    if legend := axes[1].get_legend():
+        legend.set_title('')
 
     axes[1].yaxis.set_tick_params(pad=pad)
     for tick in axes[1].yaxis.get_majorticklabels():
